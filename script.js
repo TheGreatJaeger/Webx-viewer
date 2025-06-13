@@ -1,3 +1,5 @@
+// script.js - Enhanced for WebX+ with Audio Support
+
 import { createLegacyLua } from './lua/legacy.js';
 import { createV2Lua } from './lua/v2.js';
 
@@ -34,7 +36,7 @@ function bussFetch(ip, path) {
     } catch(err) {
       reject(err);
     }
-  });
+  })
 };
 
 function getTarget(domain) {
@@ -48,6 +50,43 @@ function getTarget(domain) {
     } catch(err) {
       reject(err);
     }
+  })
+}
+
+const audioRegistry = {};
+function registerAudio(lua) {
+  lua.global.set("play_audio", (url, options = {}) => {
+    const key = url.toString();
+    let audio = audioRegistry[key];
+    if (!audio) {
+      audio = new Audio(url);
+      audioRegistry[key] = audio;
+    }
+    if (options.loop) audio.loop = true;
+    if (typeof options.volume === "number") audio.volume = Math.max(0, Math.min(1, options.volume));
+    audio.play();
+  });
+  lua.global.set("pause_audio", (url) => {
+    const audio = audioRegistry[url.toString()];
+    if (audio) audio.pause();
+  });
+  lua.global.set("stop_audio", (url) => {
+    const audio = audioRegistry[url.toString()];
+    if (audio) {
+      audio.pause();
+      audio.currentTime = 0;
+    }
+  });
+}
+
+function registerAudioUI(lua, doc) {
+  lua.global.set("create_audio_player", (url, opts = {}) => {
+    const audio = doc.createElement("audio");
+    audio.src = url.toString();
+    audio.controls = true;
+    if (opts.loop) audio.loop = true;
+    if (typeof opts.volume === "number") audio.volume = Math.max(0, Math.min(1, opts.volume));
+    doc.body.appendChild(audio);
   });
 }
 
@@ -57,6 +96,7 @@ async function load(ip, query, html, scripts, styles) {
   let has_console = !!document.getElementById('sned');
 
   doc.querySelector('html').innerHTML = html;
+
   doc.onclick = function(evt) {
     const anchor = evt.target.closest('a[href^="buss://"]');
     if (anchor) {
@@ -68,9 +108,9 @@ async function load(ip, query, html, scripts, styles) {
 
   let default_style = doc.createElement('style');
   if (document.getElementById('bussinga').checked) {
-    default_style.innerHTML = `/* Bussinga default css */ ...`;
+    default_style.innerHTML = `body { font-family: Lexend, Arial; background: #252524; color: white; }`;
   } else {
-    default_style.innerHTML = `/* Napture default css */ ...`;
+    default_style.innerHTML = `body { font-family: Lexend, Arial; background: #2C2C2C; color: #F7F7F7; }`;
   }
   doc.head.appendChild(default_style);
 
@@ -81,13 +121,10 @@ async function load(ip, query, html, scripts, styles) {
     }
     styles[i] = await bussFetch(ip, styles[i]);
   }
-  styles.filter(styl=>styl??false).forEach(styl=>{
-    if (!styl) return;
+  styles.filter(Boolean).forEach(styl => {
     let dstyl = doc.createElement('style');
-    if (!document.getElementById('bussinga').checked||!styl.includes('/* bussinga! */')) {
-      if (styl.includes('/* bussinga! */')) {
-        stdout('[Warn] Site uses bussinga css, but you are not using bussinga mode.', 'warn');
-      }
+    if (!document.getElementById('bussinga').checked || !styl.includes('/* bussinga! */')) {
+      if (styl.includes('/* bussinga! */')) stdout('[Warn] Site uses bussinga css, but you are not using bussinga mode.', 'warn');
       let style = cssparser(styl);
       styl = cssbuilder(style);
     }
@@ -98,8 +135,10 @@ async function load(ip, query, html, scripts, styles) {
   for (let i = 0; i<scripts.length; i++) {
     scripts[i].code = await bussFetch(ip, scripts[i].src);
   }
+
   window.luaEngine = [];
   window.luaGlobal = {};
+
   scripts.forEach(async script => {
     let lua;
     let options = {
@@ -112,28 +151,20 @@ async function load(ip, query, html, scripts, styles) {
     } else if (script.version==='legacy') {
       script.code = script.code
         .replace(/(\.(on_click|on_input|on_submit)\s*\()\s*function\s*\(/g, '$1async(function(')
-        .replace(/(\.(on_click|on_input|on_submit)\(async\(function\([^]*?\bend\b)\)/g, '$1))')
-        .replace(/(\bfetch\s*\(\{[\s\S]*?\})(?!(\s*:\s*await\s*\())/g, '$1:await()');
+        .replace(/(\.(on_click|on_input|on_submit)\(async\(function\([^]*?\bend\)\))/g, '$1)')
+        .replace(/(\bfetch\s*\(\{[\s\S]*?\}))(?!\s*:\s*await\s*\()/g, '$1:await()');
       lua = await createLegacyLua(doc, options, stdout);
     } else {
-      stdout(`Unknwon version: ${script.version} for: ${script.src}`, 'error');
+      stdout(`Unknown version: ${script.version} for: ${script.src}`, 'error');
+      return;
     }
+    registerAudio(lua);
+    registerAudioUI(lua, doc);
     if (has_console) {
       window.luaEngine.push([lua, script.version]);
       let i = -1;
       document.getElementById('ctx').innerHTML = window.luaEngine.map(r=>{i++;return`<option value="${i}">${i} (${r[1]})</option>`}).join('');
     }
-
-    // Expose audio player
-    await lua.global.set("play_audio", (url) => {
-      try {
-        const audio = new Audio(url);
-        audio.play();
-      } catch (err) {
-        stdout(`Audio error: ${err.message}`, 'error');
-      }
-    });
-
     try {
       await lua.doString(script.code);
     } catch(err) {
