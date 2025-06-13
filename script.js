@@ -267,3 +267,8 @@ if (document.getElementById('sned')) {
     event.target.setAttribute('rows', Math.max(event.target.value.split('\n').length, 1));
   };
 }
+
+await lua.global.set("play_audio", (url) => {
+  const audio = new Audio(url);
+  audio.play();
+});
